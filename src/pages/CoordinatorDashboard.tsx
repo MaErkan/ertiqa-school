@@ -6,26 +6,26 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContaine
 import DashboardLayout from '@/components/DashboardLayout';
 import { useAuth } from '@/contexts/AuthContext';
 import { useCloudSync } from '@/contexts/CloudSyncContext';
-import { subjects } from '@/data/demoData';
+import { subjects, teachers } from '@/data/demoData';
 
 export default function CoordinatorDashboard() {
   const navigate = useNavigate();
   const { user } = useAuth();
   const { visits } = useCloudSync();
 
-  const subject = useMemo(() => subjects.find(s => s.id === user?.subjectId), [user]);
-  const subjectVisits = useMemo(() => visits.filter(v => v.subjectId === user?.subjectId), [visits, user]);
-  const subjectTeachers = useMemo(() => subject?.teachers || [], [subject]);
+  const subject = useMemo(() => subjects.find(s => String(s.id) === String(user?.subjectId)), [subjects, user]);
+  const subjectVisits = useMemo(() => visits.filter(v => String(v.subjectId) === String(user?.subjectId)), [visits, user]);
+  const subjectTeachers = useMemo(() => teachers.filter(t => String(t.subjectId) === String(user?.subjectId)), [teachers, user]);
 
   const avgScore = subjectVisits.length > 0
-    ? (subjectVisits.reduce((sum, v) => sum + v.averageScore, 0) / subjectVisits.length).toFixed(1)
+    ? (subjectVisits.reduce((sum, v) => sum + Number(v.scoreTotal), 0) / subjectVisits.length).toFixed(1)
     : '0';
 
   const teacherPerformance = useMemo(() => {
     return subjectTeachers.map(t => {
-      const tVisits = visits.filter(v => v.teacherId === t.id);
+      const tVisits = visits.filter(v => String(v.teacherId) === String(t.id));
       const avg = tVisits.length > 0
-        ? (tVisits.reduce((s, v) => s + v.averageScore, 0) / tVisits.length).toFixed(1)
+        ? (tVisits.reduce((s, v) => s + Number(v.scoreTotal), 0) / tVisits.length).toFixed(1)
         : '0';
       return { name: t.name.split(' ').slice(0, 2).join(' '), score: parseFloat(avg) };
     });
@@ -98,9 +98,9 @@ export default function CoordinatorDashboard() {
           </h3>
           <div className="space-y-3 max-h-[280px] overflow-y-auto">
             {subjectTeachers.map((teacher) => {
-              const tVisits = visits.filter(v => v.teacherId === teacher.id);
+              const tVisits = visits.filter(v => String(v.teacherId) === String(teacher.id));
               const tAvg = tVisits.length > 0
-                ? (tVisits.reduce((s, v) => s + v.averageScore, 0) / tVisits.length).toFixed(1)
+                ? (tVisits.reduce((s, v) => s + Number(v.scoreTotal), 0) / tVisits.length).toFixed(1)
                 : '—';
               return (
                 <div key={teacher.id} className="flex items-center gap-3 p-3 rounded-xl hover:bg-gray-50 transition-colors">
@@ -175,8 +175,8 @@ export default function CoordinatorDashboard() {
                   <td className="font-ibm text-sm">{visit.className}</td>
                   <td className="font-ibm text-sm">{visit.visitDate}</td>
                   <td>
-                    <span className="font-ibm font-bold text-sm" style={{ color: getScoreColor(visit.averageScore) }}>
-                      {visit.averageScore.toFixed(1)}
+                    <span className="font-ibm font-bold text-sm" style={{ color: getScoreColor(Number(visit.scoreTotal)) }}>
+                      {Number(visit.scoreTotal).toFixed(1)}
                     </span>
                   </td>
                   <td>

@@ -1,46 +1,47 @@
 import { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Send, Star, CheckCircle, RotateCcw, ArrowRight, Calendar, Clock } from 'lucide-react';
+import { Send, Star, CheckCircle, RotateCcw, ArrowRight, Calendar, Clock, AlertTriangle } from 'lucide-react';
 import DashboardLayout from '@/components/DashboardLayout';
 import { useAuth } from '@/contexts/AuthContext';
 import { useCloudSync } from '@/contexts/CloudSyncContext';
-import { subjects, evaluationCriteria, scoreLabels, type Visit } from '@/data/demoData';
+import { evaluationCriteria, scoreLabels } from '@/data/demoData';
 
-/* ─── Generate all class options ─── */
 const classOptions: string[] = [];
-// Grade 10: 10/1 to 10/10
 for (let i = 1; i <= 10; i++) classOptions.push(`10/${i}`);
-// Grade 11: 11/1 to 11/10
 for (let i = 1; i <= 10; i++) classOptions.push(`11/${i}`);
-// Grade 12: 12/1 to 12/11
 for (let i = 1; i <= 11; i++) classOptions.push(`12/${i}`);
 
 export default function VisitForm() {
   const navigate = useNavigate();
   const { user } = useAuth();
-  const { addVisit } = useCloudSync();
+  const { subjects, teachers, isWeekend, addVisit } = useCloudSync();
 
   const [teacherId, setTeacherId] = useState('');
-  const [subjectId, setSubjectId] = useState(user?.subjectId || '');
+  const [subjectId, setSubjectId] = useState(user?.subjectId ? String(user.subjectId) : '');
   const [className, setClassName] = useState('');
-  const [visitDuration, setVisitDuration] = useState('20 دقيقة');
+  const [visitDuration, setVisitDuration] = useState('5 دقيقة');
   const [observations, setObservations] = useState('');
-  const [scores, setScores] = useState<Record<string, number>>({
-    scoreObjectives: 0, scoreStudents: 0, scoreDiscipline: 0,
-    scoreTeacherInteraction: 0, scoreSafeEnvironment: 0,
-  });
   const [submitted, setSubmitted] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  /* ─── Editable date & time ─── */
   const todayStr = new Date().toISOString().split('T')[0];
   const nowTimeStr = new Date().toLocaleTimeString('ar-QA', { hour: '2-digit', minute: '2-digit', hour12: false });
   const [visitDate, setVisitDate] = useState(todayStr);
   const [visitTime, setVisitTime] = useState(nowTimeStr);
 
-  const subject = useMemo(() => subjects.find(s => s.id === subjectId), [subjectId]);
-  const availableTeachers = useMemo(() => subject?.teachers || [], [subject]);
+  const [scores, setScores] = useState<Record<string, number>>({
+    scoreObjectives: 0, scoreStudentEngagement: 0, scoreDiscipline: 0,
+    scoreTeacherEngagement: 0, scoreEnvironment: 0,
+  });
+
+  // Weekend check
+  const isWeekendDate = useMemo(() => isWeekend(visitDate), [visitDate, isWeekend]);
+
+  const subject = useMemo(() => subjects.find(s => String(s.id) === subjectId), [subjectId, subjects]);
+  const availableTeachers = useMemo(() => teachers.filter(t => String(t.subjectId) === subjectId), [subjectId, teachers]);
+  const selectedTeacher = useMemo(() => teachers.find(t => String(t.id) === teacherId), [teacherId, teachers]);
 
   const averageScore = useMemo(() => {
     const values = Object.values(scores).filter(s => s > 0);
@@ -57,16 +58,25 @@ export default function VisitForm() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!teacherId || !allScored || !className) return;
-    setLoading(true);
 
-    const newVisit: Visit = {
-      id: `v-${Date.now()}`,
+    // Block weekend visits
+    if (isWeekendDate) {
+      setError('لا يمكن تسجيل زيارات في يوم الجمعة أو السبت — أيام عطلة رسمية');
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+
+    const totalScore = Object.values(scores).reduce((a, b) => a + b, 0);
+
+    await addVisit({
       visitorId: user?.id || '',
       visitorName: user?.name || '',
-      visitorRole: user?.roleLabel || '',
-      teacherId,
-      teacherName: availableTeachers.find(t => t.id === teacherId)?.name || '',
-      subjectId,
+      visitorRole: user?.role || '',
+      teacherId: teacherId,
+      teacherName: selectedTeacher?.name || '',
+      subjectId: subjectId,
       subjectName: subject?.name || '',
       coordinatorId: subject?.coordinatorId || '',
       coordinatorName: subject?.coordinatorName || '',
@@ -75,20 +85,17 @@ export default function VisitForm() {
       visitTime,
       visitDuration,
       scoreObjectives: scores.scoreObjectives,
-      scoreStudents: scores.scoreStudents,
+      scoreStudentEngagement: scores.scoreStudentEngagement,
       scoreDiscipline: scores.scoreDiscipline,
-      scoreTeacherInteraction: scores.scoreTeacherInteraction,
-      scoreSafeEnvironment: scores.scoreSafeEnvironment,
-      averageScore,
-      keyObservations: observations,
+      scoreTeacherEngagement: scores.scoreTeacherEngagement,
+      scoreEnvironment: scores.scoreEnvironment,
+      scoreTotal: Number((totalScore / 5).toFixed(1)),
+      notes: observations,
       status: 'sent',
-      visibleTo: [user?.id || '', subject?.coordinatorId || ''],
-      createdAt: new Date().toISOString(),
-    };
+    });
 
-    await addVisit(newVisit);
-    setLoading(false);
     setSubmitted(true);
+    setLoading(false);
   };
 
   if (submitted) {
@@ -102,32 +109,19 @@ export default function VisitForm() {
             </div>
           </motion.div>
           <h2 className="font-cairo text-2xl font-extrabold mb-3" style={{ color: 'var(--success)' }}>
-            تم إرسال الزيارة الصفية الداعمة بنجاح ☁️
+            تم إرسال الزيارة الصفية الداعمة بنجاح
           </h2>
-          <p className="font-tajawal mb-2" style={{ color: 'var(--text-secondary)' }}>
-            تم حفظ الزيارة وإشعار المعنيين
-          </p>
-          <p className="font-tajawal text-xs mb-6" style={{ color: 'var(--gray-500)' }}>
-            تمت المزامنة السحابية — تظهر الآن عند جميع المستخدمين
-          </p>
-
-          <div className="rounded-2xl p-5 mb-8 text-right" style={{ background: 'var(--off-white)' }}>
-            <div className="space-y-2 font-tajawal text-sm">
-              <div className="flex justify-between"><span style={{ color: 'var(--text-secondary)' }}>المعلم:</span><span className="font-bold">{availableTeachers.find(t => t.id === teacherId)?.name || '—'}</span></div>
-              <div className="flex justify-between"><span style={{ color: 'var(--text-secondary)' }}>المادة:</span><span className="font-bold">{subject?.name}</span></div>
-              <div className="flex justify-between"><span style={{ color: 'var(--text-secondary)' }}>الصف:</span><span className="font-bold">{className}</span></div>
-              <div className="flex justify-between"><span style={{ color: 'var(--text-secondary)' }}>التاريخ:</span><span className="font-bold">{visitDate}</span></div>
-              <div className="flex justify-between"><span style={{ color: 'var(--text-secondary)' }}>المتوسط:</span><span className="font-ibm font-bold" style={{ color: 'var(--qatar-maroon)' }}>{averageScore.toFixed(1)} / 5</span></div>
-            </div>
-          </div>
+          <p className="font-tajawal mb-2" style={{ color: 'var(--text-secondary)' }}>تم حفظ الزيارة وإشعار المعنيين</p>
+          <p className="font-tajawal text-xs mb-6" style={{ color: 'var(--gray-500)' }}>تظهر الآن عند جميع المستخدمين</p>
 
           <div className="flex gap-3 justify-center">
             <button onClick={() => {
               setSubmitted(false);
-              setScores({ scoreObjectives: 0, scoreStudents: 0, scoreDiscipline: 0, scoreTeacherInteraction: 0, scoreSafeEnvironment: 0 });
+              setScores({ scoreObjectives: 0, scoreStudentEngagement: 0, scoreDiscipline: 0, scoreTeacherEngagement: 0, scoreEnvironment: 0 });
               setTeacherId(''); setClassName(''); setObservations('');
               setVisitDate(new Date().toISOString().split('T')[0]);
               setVisitTime(new Date().toLocaleTimeString('ar-QA', { hour: '2-digit', minute: '2-digit', hour12: false }));
+              setError(null);
             }} className="btn-outline flex items-center gap-2">
               <RotateCcw size={16} /> زيارة جديدة
             </button>
@@ -145,11 +139,28 @@ export default function VisitForm() {
       <div className="max-w-2xl mx-auto">
         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
           className="bg-white rounded-3xl shadow-sm overflow-hidden">
-          {/* Header */}
           <div className="p-8 border-b" style={{ borderColor: 'var(--gray-100)' }}>
             <h2 className="font-cairo text-2xl font-extrabold mb-2" style={{ color: 'var(--text-primary)' }}>زيارة صفية داعمة جديدة</h2>
             <p className="font-tajawal" style={{ color: 'var(--text-secondary)' }}>وثّق ملاحظاتك الداعمة للمعلم</p>
           </div>
+
+          {/* Weekend Warning */}
+          {isWeekendDate && (
+            <div className="mx-8 mt-6 p-4 rounded-xl flex items-center gap-3" style={{ background: 'var(--error-light)' }}>
+              <AlertTriangle size={20} style={{ color: 'var(--error)' }} />
+              <div>
+                <p className="font-cairo font-bold text-sm" style={{ color: 'var(--error)' }}>يوم عطلة رسمية</p>
+                <p className="font-tajawal text-xs" style={{ color: 'var(--error)' }}>لا يمكن تسجيل زيارات في يوم الجمعة أو السبت</p>
+              </div>
+            </div>
+          )}
+
+          {error && (
+            <div className="mx-8 mt-6 p-4 rounded-xl flex items-center gap-3" style={{ background: 'var(--error-light)' }}>
+              <AlertTriangle size={20} style={{ color: 'var(--error)' }} />
+              <p className="font-cairo text-sm" style={{ color: 'var(--error)' }}>{error}</p>
+            </div>
+          )}
 
           <form onSubmit={handleSubmit} className="p-8 space-y-6">
             {/* Visitor Info */}
@@ -183,8 +194,8 @@ export default function VisitForm() {
               </div>
             </div>
 
-            {/* Class, Coordinator, Duration */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {/* Class */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <label className="block font-cairo font-semibold text-sm mb-2">الصف والشعبة <span className="text-red-500">*</span></label>
                 <select value={className} onChange={e => setClassName(e.target.value)} className="input-field" required>
@@ -201,22 +212,23 @@ export default function VisitForm() {
                 </select>
               </div>
               <div>
-                <label className="block font-cairo font-semibold text-sm mb-2">المنسق</label>
-                <div className="input-field flex items-center font-tajawal text-sm" style={{ background: 'var(--gray-100)' }}>
-                  {subject?.coordinatorName || '—'}
-                </div>
-              </div>
-              <div>
                 <label className="block font-cairo font-semibold text-sm mb-2">مدة الزيارة</label>
                 <select value={visitDuration} onChange={e => setVisitDuration(e.target.value)} className="input-field">
-                  <option>15 دقيقة</option>
-                  <option>20 دقيقة</option>
-                  <option>30 دقيقة</option>
+                  <option value="1 دقيقة">1 دقيقة</option>
+                  <option value="2 دقيقة">2 دقيقة</option>
+                  <option value="3 دقيقة">3 دقيقة</option>
+                  <option value="4 دقيقة">4 دقيقة</option>
+                  <option value="5 دقيقة">5 دقيقة</option>
+                  <option value="6 دقيقة">6 دقيقة</option>
+                  <option value="7 دقيقة">7 دقيقة</option>
+                  <option value="8 دقيقة">8 دقيقة</option>
+                  <option value="9 دقيقة">9 دقيقة</option>
+                  <option value="10 دقيقة">10 دقيقة</option>
                 </select>
               </div>
             </div>
 
-            {/* Date & Time - EDITABLE */}
+            {/* Date & Time */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <label className="block font-cairo font-semibold text-sm mb-2">
@@ -271,7 +283,6 @@ export default function VisitForm() {
                 ))}
               </div>
 
-              {/* Average */}
               <div className="mt-6 p-6 rounded-2xl text-center" style={{ background: 'var(--off-white)' }}>
                 <p className="font-cairo font-semibold text-sm mb-2" style={{ color: 'var(--text-secondary)' }}>المتوسط العام</p>
                 <p className="font-ibm font-bold text-4xl mb-2" style={{ color: 'var(--qatar-maroon)' }}>
@@ -288,11 +299,10 @@ export default function VisitForm() {
               <label className="block font-cairo font-semibold text-sm mb-2">أبرز الملاحظات <span className="text-xs font-tajawal" style={{ color: 'var(--gray-500)' }}>(اختياري)</span></label>
               <textarea value={observations} onChange={e => setObservations(e.target.value)}
                 placeholder="اكتب ملاحظاتك الداعمة والإيجابية هنا…" rows={4} className="input-field resize-none pt-3" />
-              <p className="font-tajawal text-xs mt-1" style={{ color: 'var(--gray-500)' }}>ركّز على ما هو إيجابي وبناء</p>
             </div>
 
             {/* Submit */}
-            <motion.button type="submit" disabled={loading || !teacherId || !allScored || !className}
+            <motion.button type="submit" disabled={loading || !teacherId || !allScored || !className || isWeekendDate}
               className="btn-primary w-full justify-center h-14 text-lg disabled:opacity-50" whileTap={{ scale: 0.98 }}>
               {loading ? <div className="spinner" /> : (<><Send size={20} /> إرسال الزيارة</>)}
             </motion.button>

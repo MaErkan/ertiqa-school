@@ -204,6 +204,15 @@ function AuthLayoutContent({
           </SidebarContent>
 
           <SidebarFooter className="p-3">
+            {/* ═══ تصميم وتطوير أركان — اللوجو ═══ */}
+            <div className="mb-3 flex flex-col items-center justify-center gap-1">
+              <div className="w-10 h-10 rounded-full overflow-hidden border" style={{ borderColor: '#D4AF37' }}>
+                <img src="/assets/arkan-logo.jpg" alt="أركان" className="w-full h-full object-cover" />
+              </div>
+              <p className="font-cairo text-[9px] tracking-wider" style={{ color: '#D4AF37' }}>
+                تصميم وتطوير
+              </p>
+            </div>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <button className="flex items-center gap-3 rounded-lg px-1 py-1 hover:bg-accent/50 transition-colors w-full text-left group-data-[collapsible=icon]:justify-center focus:outline-none focus-visible:ring-2 focus-visible:ring-ring">

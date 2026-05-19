@@ -32,6 +32,7 @@ const coordinatorNavItems: NavItem[] = [
 const sysadminNavItems: NavItem[] = [
   { label: 'لوحة التحكم', icon: LayoutDashboard, path: '/sysadmin' },
   { label: 'إدارة الموقع', icon: Shield, path: '/site-management' },
+  { label: 'التقارير الاحترافية', icon: FileText, path: '/professional-report' },
   { label: 'المواد والمعلمون', icon: TreePine, path: '/subjects' },
   { label: 'التقارير والتصدير', icon: Download, path: '/reports' },
   { label: 'الإحصائيات', icon: BarChart3, path: '/analytics' },
@@ -41,7 +42,7 @@ export default function DashboardLayout({ children, pageTitle }: { children: Rea
   const navigate = useNavigate();
   const location = useLocation();
   const { user, logout } = useAuth();
-  const { myNotifications, unreadCount, markNotificationRead, markAllRead, lastSyncTime, syncStatus, cloudEnabled } = useCloudSync();
+  const { myNotifications, unreadCount, lastSyncTime, syncStatus, markNotificationRead, markAllRead, cloudEnabled, toast, clearToast } = useCloudSync();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
 
@@ -187,6 +188,32 @@ export default function DashboardLayout({ children, pageTitle }: { children: Rea
           </span>
         </div>
       </header>
+
+      {/* ═══ Toast Notification ═══ */}
+      {toast && toast.show && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[9999] max-w-md w-[90%] animate-bounce-in">
+          <div className={`rounded-xl shadow-xl border px-4 py-3 flex items-center gap-3 ${
+            toast.type === 'visit' ? 'bg-[#8A1538]/95 border-[#D4AF37]/30' :
+            toast.type === 'sync' ? 'bg-[#1B3A5C]/95 border-[#D4AF37]/30' :
+            'bg-white/95 border-gray-200'
+          }`}>
+            <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center flex-shrink-0">
+              <Bell size={18} className="text-[#D4AF37]" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className={`font-cairo text-sm font-bold truncate ${toast.type === 'visit' || toast.type === 'sync' ? 'text-white' : 'text-gray-900'}`}>
+                {toast.type === 'visit' ? 'زيارة جديدة!' : toast.type === 'sync' ? 'تزامن!' : 'إشعار'}
+              </p>
+              <p className={`font-tajawal text-xs truncate ${toast.type === 'visit' || toast.type === 'sync' ? 'text-white/80' : 'text-gray-600'}`}>
+                {toast.message}
+              </p>
+            </div>
+            <button onClick={clearToast} className={`p-1 rounded-lg hover:bg-white/20 flex-shrink-0 ${toast.type === 'visit' || toast.type === 'sync' ? 'text-white/70' : 'text-gray-400'}`}>
+              <X size={14} />
+            </button>
+          </div>
+        </div>
+      )}
 
       <main className="main-content">
         {children}

@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useState, useEffect } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Mail, Lock, Eye, EyeOff, ArrowRight, Shield, Users, Settings, User } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
@@ -37,15 +37,24 @@ const coordinatorPeople: LoginPerson[] = [
 ];
 
 const sysadminPeople: LoginPerson[] = [
-  { id: 'sys-1', name: 'الأستاذ يوسف الجاسم', email: 'y.al-jassim0101@education.qa', role: 'sysadmin' },
-  { id: 'sys-2', name: 'الدكتور أحمد رمضان', email: 'a.mohamed2211@education.qa', role: 'sysadmin' },
+  { id: 'sys-1', name: 'الأستاذ يوسف الجاسم', email: 'sysadmin1@ertiqa.edu.qa', role: 'sysadmin' },
+  { id: 'sys-2', name: 'الدكتور أحمد رمضان', email: 'sysadmin2@ertiqa.edu.qa', role: 'sysadmin' },
 ];
 
-const sections = [
+interface SectionDef {
+  id: string;
+  title: string;
+  description: string;
+  icon: React.ElementType;
+  color: string;
+  people: LoginPerson[];
+}
+
+const sections: SectionDef[] = [
   {
     id: 'administration',
     title: 'إدارة المدرسة',
-    description: 'وصول شامل لإدارة الزيارات والمعلمين والتقارير',
+    description: 'مدير المدرسة والنواب',
     icon: Shield,
     color: '#8A1538',
     people: adminPeople,
@@ -53,7 +62,7 @@ const sections = [
   {
     id: 'coordinator',
     title: 'منسقو المواد',
-    description: 'متابعة معلمي المادة والزيارات والتقارير الخاصة',
+    description: '11 منسق مادة دراسية',
     icon: Users,
     color: '#D4AF37',
     people: coordinatorPeople,
@@ -61,7 +70,7 @@ const sections = [
   {
     id: 'sysadmin',
     title: 'مسؤولو النظام',
-    description: 'إدارة المستخدمين والصلاحيات والنسخ الاحتياطي',
+    description: 'إدارة المنصة والمستخدمين',
     icon: Settings,
     color: '#4A7FB5',
     people: sysadminPeople,
@@ -72,10 +81,17 @@ type Step = 'section' | 'person' | 'credentials';
 
 export default function LoginPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { login } = useAuth();
 
-  const [step, setStep] = useState<Step>('section');
-  const [selectedSection, setSelectedSection] = useState<typeof sections[0] | null>(null);
+  const preselectedRole = (location.state as { roleType?: string } | null)?.roleType;
+
+  const initialSection = preselectedRole
+    ? sections.find(s => s.id === preselectedRole) ?? null
+    : null;
+
+  const [step, setStep] = useState<Step>(initialSection ? 'person' : 'section');
+  const [selectedSection, setSelectedSection] = useState<SectionDef | null>(initialSection);
   const [selectedPerson, setSelectedPerson] = useState<LoginPerson | null>(null);
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -83,7 +99,17 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [shake, setShake] = useState(false);
 
-  const handleSelectSection = (section: typeof sections[0]) => {
+  useEffect(() => {
+    if (preselectedRole) {
+      const section = sections.find(s => s.id === preselectedRole);
+      if (section) {
+        setSelectedSection(section);
+        setStep('person');
+      }
+    }
+  }, [preselectedRole]);
+
+  const handleSelectSection = (section: SectionDef) => {
     setSelectedSection(section);
     setStep('person');
   };
@@ -95,20 +121,19 @@ export default function LoginPage() {
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!password || password.length < 6) {
-      setErrors({ password: 'كلمة المرور يجب أن تكون 6 أحرف على الأقل' });
+    if (password !== 'admin123') {
+      setErrors({ password: 'كلمة المرور خاطئة. كلمة المرور الصحيحة: admin123' });
       setShake(true);
       setTimeout(() => setShake(false), 500);
       return;
     }
     setLoading(true);
     setTimeout(() => {
-      const success = login(selectedPerson!.email, password, selectedSection?.id);
+      const success = login(selectedPerson!.email, password, selectedPerson!.role);
       setLoading(false);
       if (success) {
-        const user = JSON.parse(localStorage.getItem('ertiqa_user') || '{}');
-        if (user.role === 'coordinator') navigate('/coordinator');
-        else if (user.role === 'sysadmin') navigate('/sysadmin');
+        if (selectedPerson?.role === 'coordinator') navigate('/coordinator');
+        else if (selectedPerson?.role === 'sysadmin') navigate('/sysadmin');
         else navigate('/dashboard');
       } else {
         setErrors({ password: 'بيانات الدخول غير صحيحة' });
@@ -199,6 +224,7 @@ export default function LoginPage() {
                     </div>
                     <h3 className="font-cairo text-xl font-bold mb-2" style={{ color: 'var(--text-primary)' }}>{section.title}</h3>
                     <p className="font-tajawal text-sm" style={{ color: 'var(--text-secondary)' }}>{section.description}</p>
+                    <p className="font-ibm text-xs mt-2" style={{ color: 'var(--gray-500)' }}>{section.people.length} موظف</p>
                   </motion.button>
                 ))}
               </div>
@@ -291,69 +317,45 @@ export default function LoginPage() {
                 </div>
 
                 <form onSubmit={handleLogin} className="space-y-5">
-                  {/* Email - auto-filled, read-only */}
                   <div>
-                    <label className="block font-cairo font-semibold text-sm mb-2" style={{ color: 'var(--text-primary)' }}>
-                      البريد الإلكتروني
-                    </label>
+                    <label className="block font-cairo font-semibold text-sm mb-2">البريد الإلكتروني</label>
                     <div className="relative">
                       <Mail size={18} className="absolute right-4 top-1/2 -translate-y-1/2" style={{ color: 'var(--gray-500)' }} />
-                      <input
-                        type="email"
-                        value={selectedPerson.email}
-                        readOnly
-                        className="input-field pr-11 opacity-70 cursor-default"
-                        dir="ltr"
-                      />
+                      <input type="email" value={selectedPerson.email} readOnly className="input-field pr-11 opacity-70 cursor-default" dir="ltr" />
                     </div>
                   </div>
 
-                  {/* Password */}
                   <div>
-                    <label className="block font-cairo font-semibold text-sm mb-2" style={{ color: 'var(--text-primary)' }}>
-                      كلمة المرور
-                    </label>
+                    <label className="block font-cairo font-semibold text-sm mb-2">كلمة المرور</label>
                     <div className="relative">
                       <Lock size={18} className="absolute right-4 top-1/2 -translate-y-1/2" style={{ color: 'var(--gray-500)' }} />
                       <input
                         type={showPassword ? 'text' : 'password'}
                         value={password}
                         onChange={e => { setPassword(e.target.value); setErrors({}); }}
-                        placeholder="••••••••"
+                        placeholder="admin123"
                         className="input-field pr-11 pl-11"
                         dir="ltr"
                         autoFocus
                       />
-                      <button
-                        type="button"
-                        onClick={() => setShowPassword(!showPassword)}
-                        className="absolute left-4 top-1/2 -translate-y-1/2"
-                        style={{ color: 'var(--gray-500)' }}
-                      >
+                      <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute left-4 top-1/2 -translate-y-1/2" style={{ color: 'var(--gray-500)' }}>
                         {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
                       </button>
                     </div>
                     {errors.password && <p className="text-sm mt-1 font-tajawal" style={{ color: 'var(--error)' }}>{errors.password}</p>}
                   </div>
 
-                  <button
-                    type="submit"
-                    disabled={loading}
-                    className="btn-primary w-full justify-center h-14 text-lg disabled:opacity-70"
-                    style={{ background: selectedSection.color }}
-                  >
+                  <button type="submit" disabled={loading} className="btn-primary w-full justify-center h-14 text-lg disabled:opacity-70" style={{ background: selectedSection.color }}>
                     {loading ? <div className="spinner" /> : 'تسجيل الدخول'}
                   </button>
                 </form>
 
-                {/* Hint */}
-                <div className="mt-6 p-4 rounded-xl" style={{ background: 'var(--gray-100)' }}>
-                  <p className="font-cairo text-xs font-bold mb-1" style={{ color: 'var(--text-secondary)' }}>
-                    تسجيل الدخول التجريبي:
-                  </p>
-                  <p className="font-tajawal text-xs" style={{ color: 'var(--gray-500)' }}>
-                    أي كلمة مرور (6 أحرف على الأقل)
-                  </p>
+                <div className="mt-6 p-4 rounded-xl flex items-center gap-3" style={{ background: 'var(--success-light)' }}>
+                  <Lock size={16} style={{ color: 'var(--success)' }} />
+                  <div>
+                    <p className="font-cairo text-xs font-bold" style={{ color: 'var(--success)' }}>بيانات الدخول التجريبية:</p>
+                    <p className="font-tajawal text-xs" style={{ color: 'var(--success)' }}>كلمة المرور: admin123</p>
+                  </div>
                 </div>
               </div>
             </motion.div>

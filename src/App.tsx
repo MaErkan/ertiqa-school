@@ -1,64 +1,75 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { AuthProvider, useAuth } from '@/contexts/AuthContext';
-import { CloudSyncProvider } from '@/contexts/CloudSyncContext';
+import { Routes, Route } from 'react-router-dom';
+import { useState, useEffect } from 'react';
+import { RefreshCw } from 'lucide-react';
 import LandingPage from '@/pages/LandingPage';
 import LoginPage from '@/pages/LoginPage';
 import AdminDashboard from '@/pages/AdminDashboard';
 import CoordinatorDashboard from '@/pages/CoordinatorDashboard';
 import SystemAdminDashboard from '@/pages/SystemAdminDashboard';
+import SiteManagement from '@/pages/SiteManagement';
+import ProfessionalReport from '@/pages/ProfessionalReport';
 import VisitForm from '@/pages/VisitForm';
 import ReportsPage from '@/pages/ReportsPage';
 import AnalyticsPage from '@/pages/AnalyticsPage';
 import SubjectTree from '@/pages/SubjectTree';
-import SiteManagement from '@/pages/SiteManagement';
-import './App.css';
+import NotFoundPage from '@/pages/NotFoundPage';
+import { AuthProvider } from '@/contexts/AuthContext';
+import { CloudSyncProvider } from '@/contexts/CloudSyncContext';
 
-function ProtectedRoute({ children, allowedRoles }: { children: React.ReactNode; allowedRoles?: string[] }) {
-  const { isAuthenticated, user } = useAuth();
+/* ═══════════════════════════════════════════
+   Update Toast — shows when new version is available
+   ═══════════════════════════════════════════ */
+function UpdateToast() {
+  const [show, setShow] = useState(false);
+  const [message, setMessage] = useState('');
 
-  if (!isAuthenticated) {
-    return <Navigate to="/login" replace />;
-  }
+  useEffect(() => {
+    const handleUpdate = (e: any) => {
+      setMessage(e.detail?.message || 'تحديث جديد متاح!');
+      setShow(true);
+    };
+    window.addEventListener('ertiqa:update', handleUpdate);
+    return () => window.removeEventListener('ertiqa:update', handleUpdate);
+  }, []);
 
-  if (allowedRoles && user && !allowedRoles.includes(user.role)) {
-    if (user.role === 'coordinator') return <Navigate to="/coordinator" replace />;
-    if (user.role === 'sysadmin') return <Navigate to="/sysadmin" replace />;
-    return <Navigate to="/dashboard" replace />;
-  }
+  if (!show) return null;
 
-  return <>{children}</>;
+  return (
+    <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[9999] animate-bounce-in">
+      <div className="rounded-xl shadow-xl border px-4 py-3 flex items-center gap-3 bg-gradient-to-r from-[#1B3A5C] to-[#8A1538] border-[#D4AF37]/30">
+        <RefreshCw size={20} className="text-[#D4AF37] animate-spin" />
+        <p className="font-cairo text-sm font-bold text-white">{message}</p>
+      </div>
+    </div>
+  );
 }
 
 function AppRoutes() {
-  const { isAuthenticated, user } = useAuth();
-
   return (
     <Routes>
       <Route path="/" element={<LandingPage />} />
-      <Route path="/login" element={isAuthenticated ? <Navigate to={user?.role === 'coordinator' ? '/coordinator' : user?.role === 'sysadmin' ? '/sysadmin' : '/dashboard'} replace /> : <LoginPage />} />
-      <Route path="/dashboard" element={<ProtectedRoute allowedRoles={['manager', 'academic_vp', 'admin_vp']}><AdminDashboard /></ProtectedRoute>} />
-      <Route path="/coordinator" element={<ProtectedRoute allowedRoles={['coordinator']}><CoordinatorDashboard /></ProtectedRoute>} />
-      <Route path="/sysadmin" element={<ProtectedRoute allowedRoles={['sysadmin']}><SystemAdminDashboard /></ProtectedRoute>} />
-      <Route path="/visit/new" element={<ProtectedRoute allowedRoles={['manager', 'academic_vp', 'admin_vp', 'coordinator']}><VisitForm /></ProtectedRoute>} />
-      <Route path="/reports" element={<ProtectedRoute><ReportsPage /></ProtectedRoute>} />
-      <Route path="/analytics" element={<ProtectedRoute><AnalyticsPage /></ProtectedRoute>} />
-      <Route path="/subjects" element={<ProtectedRoute><SubjectTree /></ProtectedRoute>} />
-      <Route path="/site-management" element={<ProtectedRoute allowedRoles={['sysadmin']}><SiteManagement /></ProtectedRoute>} />
-      <Route path="*" element={<Navigate to="/" replace />} />
+      <Route path="/login" element={<LoginPage />} />
+      <Route path="/dashboard" element={<AdminDashboard />} />
+      <Route path="/coordinator" element={<CoordinatorDashboard />} />
+      <Route path="/sysadmin" element={<SystemAdminDashboard />} />
+      <Route path="/site-management" element={<SiteManagement />} />
+      <Route path="/professional-report" element={<ProfessionalReport />} />
+      <Route path="/visit/new" element={<VisitForm />} />
+      <Route path="/reports" element={<ReportsPage />} />
+      <Route path="/analytics" element={<AnalyticsPage />} />
+      <Route path="/subjects" element={<SubjectTree />} />
+      <Route path="*" element={<NotFoundPage />} />
     </Routes>
   );
 }
 
-function App() {
+export default function App() {
   return (
-    <BrowserRouter>
-      <AuthProvider>
-        <CloudSyncProvider>
-          <AppRoutes />
-        </CloudSyncProvider>
-      </AuthProvider>
-    </BrowserRouter>
+    <AuthProvider>
+      <CloudSyncProvider>
+        <UpdateToast />
+        <AppRoutes />
+      </CloudSyncProvider>
+    </AuthProvider>
   );
 }
-
-export default App;

@@ -1,462 +1,518 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
-import {
-  supabase, isSupabaseConfigured, VISITS_TABLE,
-  visitToRow, rowToVisit,
-} from '@/lib/supabase';
-import type { Visit } from '@/data/demoData';
-import { sampleVisits } from '@/data/demoData';
+import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
 import { useAuth } from './AuthContext';
+import { subjects as demoSubjects, teachers as demoTeachers } from '@/data/demoData';
+import { supabase, VISITS_TABLE, visitToRow, rowToVisit, testSupabaseConnection } from '@/lib/supabase';
 
-/* ─── Notification with target audience ─── */
-interface CloudNotification {
+export interface CloudNotification {
   id: string;
   title: string;
   message: string;
-  time: string;
+  type: 'visit' | 'report' | 'sync' | 'system';
   read: boolean;
-  type: 'visit' | 'report' | 'sync';
-  timestamp: number;
-  /* who should see this notification */
-  targetRoles: string[];       // e.g. ['manager','academic_vp','coordinator']
-  targetSubjectId?: string;    // for coordinator-specific notifications
-  triggeredBy?: string;        // role that triggered it (to avoid self-notification)
+  targetRoles: string[];
+  targetSubjectId?: string;
+  triggeredBy?: string;
+  createdAt: string;
+}
+
+export interface VisitData {
+  id: string;
+  visitorId: string;
+  visitorName: string;
+  visitorRole: string;
+  teacherId: string;
+  teacherName: string;
+  subjectId: string;
+  subjectName: string;
+  coordinatorId: string;
+  coordinatorName: string;
+  className: string;
+  visitDate: string;
+  visitTime: string;
+  visitDuration: string;
+  scoreObjectives: number;
+  scoreStudentEngagement: number;
+  scoreDiscipline: number;
+  scoreTeacherEngagement: number;
+  scoreEnvironment: number;
+  scoreTotal: number;
+  notes: string;
+  status: 'sent' | 'draft';
+  visibleTo: string[];
+  createdAt: string;
+  deviceId?: string;
 }
 
 interface CloudSyncContextType {
-  visits: Visit[];
-  addVisit: (visit: Visit) => Promise<boolean>;
-  getVisitsForUser: () => Visit[];
-  getVisitsForCoordinator: (subjectId: string) => Visit[];
+  visits: VisitData[];
   notifications: CloudNotification[];
-  myNotifications: CloudNotification[]; // filtered for current user
-  markNotificationRead: (id: string) => void;
-  markAllRead: () => void;
+  myNotifications: CloudNotification[];
   unreadCount: number;
   lastSyncTime: string;
   syncStatus: 'online' | 'offline' | 'syncing';
   cloudEnabled: boolean;
-  exportData: () => string;
-  importData: (json: string) => boolean;
-  pushToCloud: () => Promise<boolean>;
-  pullFromCloud: () => Promise<boolean>;
-}
-
-const STORAGE_KEY = 'ertiqa_visits_v3';
-const NOTIF_KEY = 'ertiqa_notifications_v3';
-const SYNC_CHANNEL = 'ertiqa_realtime_sync';
-
-function loadLocalVisits(): Visit[] {
-  try {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored) return JSON.parse(stored);
-  } catch { /* ignore */ }
-  return [...sampleVisits];
-}
-
-function loadLocalNotifications(): CloudNotification[] {
-  try {
-    const stored = localStorage.getItem(NOTIF_KEY);
-    if (stored) return JSON.parse(stored);
-  } catch { /* ignore */ }
-  return [];
-}
-
-function saveLocal(key: string, data: unknown) {
-  try { localStorage.setItem(key, JSON.stringify(data)); } catch { /* ignore */ }
-}
-
-function nowTime(): string {
-  return new Date().toLocaleTimeString('ar-QA');
+  subjects: typeof demoSubjects;
+  teachers: typeof demoTeachers;
+  toast: { show: boolean; message: string; type: string } | null;
+  addVisit: (visit: Omit<VisitData, 'id' | 'createdAt' | 'visibleTo'>) => Promise<void>;
+  syncVisits: () => Promise<void>;
+  exportData: () => Promise<string>;
+  importData: (json: string) => Promise<boolean>;
+  pushToCloud: () => Promise<void>;
+  pullFromCloud: () => Promise<void>;
+  markNotificationRead: (id: string) => void;
+  markAllRead: () => void;
+  isWeekend: (dateStr: string) => boolean;
+  syncStats: { online: boolean; supabase: boolean; syncedDevices: number };
+  clearToast: () => void;
 }
 
 const CloudSyncContext = createContext<CloudSyncContextType>({
   visits: [],
-  addVisit: async () => false,
-  getVisitsForUser: () => [],
-  getVisitsForCoordinator: () => [],
   notifications: [],
   myNotifications: [],
-  markNotificationRead: () => {},
-  markAllRead: () => {},
   unreadCount: 0,
   lastSyncTime: '',
-  syncStatus: 'syncing',
+  syncStatus: 'offline',
   cloudEnabled: false,
-  exportData: () => '',
-  importData: () => false,
-  pushToCloud: async () => false,
-  pullFromCloud: async () => false,
+  subjects: demoSubjects,
+  teachers: demoTeachers,
+  toast: null,
+  addVisit: async () => {},
+  syncVisits: async () => {},
+  exportData: async () => '',
+  importData: async () => false,
+  pushToCloud: async () => {},
+  pullFromCloud: async () => {},
+  markNotificationRead: () => {},
+  markAllRead: () => {},
+  isWeekend: () => false,
+  syncStats: { online: false, supabase: false, syncedDevices: 0 },
+  clearToast: () => {},
 });
 
-/* ─── Smart notification routing ─── */
-function createVisitNotifications(visit: Visit): CloudNotification[] {
-  const baseMsg = `قام ${visit.visitorName} بزيارة ${visit.teacherName} — ${visit.subjectName} — ${visit.className}`;
-  const triggeredBy = visit.visitorRole;
-  const results: CloudNotification[] = [];
+function roleLabel(role: string): string {
+  const labels: Record<string, string> = {
+    manager: 'مدير المدرسة', academic_vp: 'النائب الأكاديمي',
+    admin_vp: 'النائب الإداري', coordinator: 'منسق مادة', sysadmin: 'مسؤول النظام',
+  };
+  return labels[role] || role;
+}
 
-  // 1. Notification for the SUBJECT COORDINATOR
-  // When manager/deputy visits → coordinator of the subject gets notified
-  if (visit.coordinatorId || visit.coordinatorName) {
-    results.push({
-      id: 'notif-coord-' + Date.now(),
-      title: 'زيارة صفية لمادة إشرافك ☁️',
-      message: baseMsg + ` (المنسق: ${visit.coordinatorName})`,
-      time: 'الآن',
-      read: false,
-      type: 'visit',
-      timestamp: Date.now(),
-      targetRoles: ['coordinator'],
-      targetSubjectId: visit.subjectId,
-      triggeredBy,
+function routeNotifications(visit: VisitData): CloudNotification[] {
+  const notifs: CloudNotification[] = [];
+  const time = Date.now();
+
+  if (visit.coordinatorId) {
+    notifs.push({
+      id: `n_${time}_c_${visit.subjectId}`,
+      title: `زيارة لمادة ${visit.subjectName}`,
+      message: `${visit.visitorName} (${roleLabel(visit.visitorRole)}) زار ${visit.teacherName} — ${visit.className}`,
+      type: 'visit', read: false, targetRoles: ['coordinator'],
+      targetSubjectId: visit.subjectId, triggeredBy: visit.visitorRole,
+      createdAt: new Date().toISOString(),
     });
   }
 
-  // 2. Notification for ACADEMIC VP
-  // When coordinator visits → academic VP gets notified
-  if (triggeredBy.includes('منسق')) {
-    results.push({
-      id: 'notif-vp-' + Date.now(),
-      title: 'زيارة منسق جديدة 📋',
-      message: baseMsg,
-      time: 'الآن',
-      read: false,
-      type: 'visit',
-      timestamp: Date.now(),
-      targetRoles: ['manager', 'academic_vp'],
-      triggeredBy,
+  notifs.push({
+    id: `n_${time}_m`,
+    title: `زيارة صفية جديدة`,
+    message: `${visit.visitorName} (${roleLabel(visit.visitorRole)}) زار ${visit.teacherName} — ${visit.subjectName}`,
+    type: 'visit', read: false, targetRoles: ['manager'],
+    triggeredBy: visit.visitorRole,
+    createdAt: new Date().toISOString(),
+  });
+
+  if (visit.visitorRole === 'coordinator' || visit.visitorRole === 'manager') {
+    notifs.push({
+      id: `n_${time}_avp`, title: `زيارة من ${roleLabel(visit.visitorRole)}`,
+      message: `${visit.visitorName} زار ${visit.teacherName} — ${visit.subjectName}`,
+      type: 'visit', read: false, targetRoles: ['academic_vp'],
+      triggeredBy: visit.visitorRole,
+      createdAt: new Date().toISOString(),
     });
   }
 
-  // 3. Notification for MANAGER
-  // All visits reach the manager
-  if (triggeredBy.includes('منسق') || triggeredBy.includes('نائب')) {
-    results.push({
-      id: 'notif-mgr-' + (Date.now() + 1),
-      title: 'زيارة صفية في المدرسة 🏫',
-      message: baseMsg + ` — بواسطة ${visit.visitorRole}`,
-      time: 'الآن',
-      read: false,
-      type: 'visit',
-      timestamp: Date.now(),
-      targetRoles: ['manager'],
-      triggeredBy,
-    });
-  }
-
-  // 4. ADMIN VP notification for discipline/behavior related
   if (visit.scoreDiscipline < 3) {
-    results.push({
-      id: 'notif-adm-' + Date.now(),
-      title: '⚠️ ملاحظة انضباطية',
-      message: `انضباط ${visit.className}: ${visit.scoreDiscipline}/5 — ${visit.teacherName}`,
-      time: 'الآن',
-      read: false,
-      type: 'report',
-      timestamp: Date.now(),
-      targetRoles: ['admin_vp', 'manager'],
-      triggeredBy,
+    notifs.push({
+      id: `n_${time}_d`, title: `⚠️ تنبيه انضباط`,
+      message: `درجة الانضباط ${visit.scoreDiscipline}/5 — ${visit.visitorName} → ${visit.teacherName}`,
+      type: 'report', read: false, targetRoles: ['admin_vp', 'manager'],
+      triggeredBy: visit.visitorRole,
+      createdAt: new Date().toISOString(),
     });
   }
 
-  // 5. Generic broadcast (for everyone who should see it)
-  results.push({
-    id: 'notif-all-' + Date.now(),
-    title: 'زيارة جديدة ☁️',
-    message: baseMsg,
-    time: 'الآن',
-    read: false,
-    type: 'visit',
-    timestamp: Date.now(),
-    targetRoles: ['manager', 'academic_vp', 'admin_vp', 'coordinator'],
-    targetSubjectId: visit.subjectId,
-    triggeredBy,
-  });
-
-  return results;
-}
-
-/* ─── Filter notifications for current user ─── */
-function filterNotificationsForUser(
-  notifications: CloudNotification[],
-  userRole?: string,
-  userSubjectId?: string
-): CloudNotification[] {
-  if (!userRole) return [];
-  return notifications.filter(n => {
-    // Role-based filter
-    const roleMatch = n.targetRoles.some(r => {
-      if (userRole === 'manager') return r === 'manager';        // manager sees manager-targeted
-      if (userRole === 'academic_vp') return r === 'academic_vp' || r === 'manager'; // VP sees VP+manager
-      if (userRole === 'admin_vp') return r === 'admin_vp' || r === 'manager';        // admin VP sees admin+manager
-      if (userRole === 'coordinator') return r === 'coordinator'; // coordinator sees coordinator-targeted
-      if (userRole === 'sysadmin') return true;                   // sysadmin sees all
-      return false;
+  if (visit.scoreTotal < 2.5) {
+    notifs.push({
+      id: `n_${time}_l`, title: `⚠️ أداء منخفض — ${visit.teacherName}`,
+      message: `متوسط ${visit.scoreTotal}/5 في ${visit.subjectName}`,
+      type: 'report', read: false, targetRoles: ['coordinator', 'manager'],
+      targetSubjectId: visit.subjectId, triggeredBy: visit.visitorRole,
+      createdAt: new Date().toISOString(),
     });
+  }
 
-    // For coordinators: only see notifications for THEIR subject
-    if (userRole === 'coordinator' && n.targetSubjectId) {
-      return roleMatch && n.targetSubjectId === userSubjectId;
-    }
-
-    return roleMatch;
-  });
+  return notifs;
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+//  MAIN PROVIDER — Optimized for SPEED
+// ═══════════════════════════════════════════════════════════════════════════
 export const CloudSyncProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user } = useAuth();
-  const [visits, setVisits] = useState<Visit[]>(loadLocalVisits);
-  const [notifications, setNotifications] = useState<CloudNotification[]>(loadLocalNotifications);
-  const [syncStatus, setSyncStatus] = useState<'online' | 'offline' | 'syncing'>('syncing');
-  const [lastSyncTime, setLastSyncTime] = useState(nowTime);
-  const [cloudEnabled] = useState(isSupabaseConfigured());
-  const channelRef = useRef<BroadcastChannel | null>(null);
-  const hasPulled = useRef(false);
-  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [visits, setVisits] = useState<VisitData[]>(() => {
+    try { return JSON.parse(localStorage.getItem('ertiqa_visits') || '[]'); }
+    catch { return []; }
+  });
+  const [notifications, setNotifications] = useState<CloudNotification[]>(() => {
+    try { return JSON.parse(localStorage.getItem('ertiqa_notifications') || '[]'); }
+    catch { return []; }
+  });
+  const [syncStatus, setSyncStatus] = useState<'online' | 'offline' | 'syncing'>('offline');
+  const [lastSyncTime, setLastSyncTime] = useState('');
+  const [cloudEnabled, setCloudEnabled] = useState(false);
+  const [syncStats, setSyncStats] = useState({ online: false, supabase: false, syncedDevices: 0 });
+  const [toast, setToast] = useState<{ show: boolean; message: string; type: string } | null>(null);
 
-  // Filter notifications for current user
-  const myNotifications = filterNotificationsForUser(notifications, user?.role, user?.subjectId);
-  const unreadCount = myNotifications.filter(n => !n.read).length;
+  const knownIdsRef = useRef(new Set<string>(
+    JSON.parse(localStorage.getItem('ertiqa_visits') || '[]').map((v: VisitData) => v.id)
+  ));
+  const prevCountRef = useRef(knownIdsRef.current.size);
 
-  /* ─── Persist ─── */
-  useEffect(() => { saveLocal(STORAGE_KEY, visits); }, [visits]);
-  useEffect(() => { saveLocal(NOTIF_KEY, notifications); }, [notifications]);
-
-  /* ─── BroadcastChannel: instant cross-tab ─── */
-  useEffect(() => {
-    const channel = new BroadcastChannel(SYNC_CHANNEL);
-    channelRef.current = channel;
-    channel.onmessage = (event) => {
-      const msg = event.data as { type: string; visit?: Visit; notifications?: CloudNotification[] };
-      if (msg.type === 'new_visit' && msg.visit) {
-        setVisits(prev => {
-          if (prev.find(v => v.id === msg.visit!.id)) return prev;
-          return [msg.visit!, ...prev];
-        });
-        // Create and store targeted notifications
-        const newNotifs = createVisitNotifications(msg.visit);
-        setNotifications(prev => [...newNotifs, ...prev].slice(0, 100));
-        setLastSyncTime(nowTime());
-        setSyncStatus('online');
-      } else if (msg.type === 'sync_notifs' && msg.notifications) {
-        setNotifications(prev => [...msg.notifications!, ...prev].slice(0, 100));
-      }
-    };
-    return () => channel.close();
+  // ── Toast helper ──
+  const showToast = useCallback((message: string, type: string = 'info') => {
+    setToast({ show: true, message, type });
+    setTimeout(() => setToast(null), 5000);
   }, []);
 
-  /* ─── Supabase Realtime + Polling ─── */
+  const clearToast = useCallback(() => setToast(null), []);
+
+  // ── Supabase connection test ──
   useEffect(() => {
-    if (!cloudEnabled || !supabase) {
-      setSyncStatus('offline');
-      return;
-    }
-    setSyncStatus('syncing');
+    testSupabaseConnection().then(r => {
+      setCloudEnabled(r.success);
+      setSyncStats(prev => ({ ...prev, supabase: r.success }));
+      setSyncStatus(navigator.onLine ? 'online' : 'offline');
+    });
+  }, []);
 
-    const sub = supabase
-      .channel('visits-realtime')
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: VISITS_TABLE },
-        (payload) => {
-          const row = payload.new as unknown as Parameters<typeof rowToVisit>[0];
-          const visit = rowToVisit(row);
-          setVisits(prev => {
-            if (prev.find(v => v.id === visit.id)) return prev;
-            return [visit, ...prev];
-          });
-          const newNotifs = createVisitNotifications(visit);
-          setNotifications(prev => [...newNotifs, ...prev].slice(0, 100));
-          setLastSyncTime(nowTime());
-          setSyncStatus('online');
-          // Broadcast notifications to other tabs
-          if (channelRef.current) {
-            channelRef.current.postMessage({ type: 'sync_notifs', notifications: newNotifs });
-          }
-        }
-      )
-      .subscribe((status: string) => {
-        setSyncStatus(status === 'SUBSCRIBED' ? 'online' : 'offline');
-      });
+  // ═════════════════════════════════════════════════════════════════
+  //  ULTRA-FAST CLOUD SYNC — 500ms polling + immediate events
+  // ═════════════════════════════════════════════════════════════════
+  useEffect(() => {
+    let mounted = true;
 
-    // Initial pull
-    if (!hasPulled.current) {
-      hasPulled.current = true;
-      pullFromCloudEffect();
-    }
+    const poll = async () => {
+      if (!mounted || !supabase || !navigator.onLine) return;
 
-    // Polling every 8 seconds for cross-network sync
-    pollIntervalRef.current = setInterval(async () => {
-      if (!cloudEnabled || !supabase) return;
       try {
         const { data, error } = await supabase
           .from(VISITS_TABLE)
           .select('*')
           .order('created_at', { ascending: false })
-          .limit(100);
-        if (error) return;
-        if (data && data.length > 0) {
-          const cloudVisits = data.map(rowToVisit);
-          setVisits(prev => {
-            const merged = [...cloudVisits];
-            prev.forEach(v => { if (!merged.find(m => m.id === v.id)) merged.push(v); });
-            return merged.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+          .limit(50);
+
+        if (error || !data) return;
+
+        const cloudVisits: VisitData[] = data.map(rowToVisit);
+        const newVisits = cloudVisits.filter(v => !knownIdsRef.current.has(v.id));
+
+        if (newVisits.length > 0) {
+          newVisits.forEach(v => knownIdsRef.current.add(v.id));
+
+          // Save to localStorage
+          const allVisits = [...newVisits, ...cloudVisits.filter(v => !newVisits.includes(v))];
+          localStorage.setItem('ertiqa_visits', JSON.stringify(allVisits));
+
+          // FORCE RE-RENDER with new array reference
+          setVisits([...allVisits]);
+
+          // Generate notifications
+          const allNotifs: CloudNotification[] = [];
+          newVisits.forEach(v => {
+            const notifs = routeNotifications(v);
+            notifs.forEach(n => allNotifs.push(n));
           });
+
+          if (allNotifs.length > 0) {
+            setNotifications(prev => [...allNotifs, ...prev]);
+            const existingNotifs = JSON.parse(localStorage.getItem('ertiqa_notifications') || '[]');
+            localStorage.setItem('ertiqa_notifications', JSON.stringify([...allNotifs, ...existingNotifs].slice(0, 500)));
+          }
+
+          // SHOW TOAST immediately
+          if (newVisits.length === 1) {
+            const v = newVisits[0];
+            showToast(`زيارة جديدة: ${v.visitorName} → ${v.teacherName}`, 'visit');
+          } else {
+            showToast(`${newVisits.length} زيارات جديدة من أجهزة أخرى`, 'sync');
+          }
+
+          // Browser notification + Service Worker push
+          newVisits.forEach(v => {
+            // 1. Standard notification (foreground)
+            if ('Notification' in window && Notification.permission === 'granted') {
+              try {
+                new Notification('زيارة جديدة — ارتقاء', {
+                  body: `${v.visitorName} زار ${v.teacherName} (${v.subjectName})`,
+                  icon: '/pwa-icon-192.png',
+                  dir: 'rtl',
+                  tag: v.id,
+                });
+              } catch { /* */ }
+            }
+            // 2. Service Worker push (works in background)
+            if ('serviceWorker' in navigator) {
+              navigator.serviceWorker.ready.then(reg => {
+                reg.active?.postMessage({
+                  type: 'LOCAL_PUSH',
+                  title: `زيارة جديدة — ${v.visitorName}`,
+                  body: `زار ${v.teacherName} — ${v.subjectName} — ${v.className}`,
+                  tag: v.id,
+                });
+              });
+            }
+          });
+
+          // Vibrate
+          if ('vibrate' in navigator) {
+            try { navigator.vibrate([100, 50, 100]); } catch { /* */ }
+          }
+
+          // Update badge
+          if ('setAppBadge' in navigator) {
+            try { (navigator as any).setAppBadge(allNotifs.filter(n => !n.read).length); } catch { /* */ }
+          }
+
+          setLastSyncTime(new Date().toLocaleTimeString('ar-QA'));
+          setSyncStatus('online');
         }
       } catch { /* ignore */ }
-    }, 8000);
+    };
+
+    // Poll every 300ms for near-realtime
+    const timer = setInterval(poll, 300);
+    poll(); // Initial
+
+    // BroadcastChannel — instant same-browser sync
+    let bc: BroadcastChannel | null = null;
+    if (typeof BroadcastChannel !== 'undefined') {
+      try {
+        bc = new BroadcastChannel('ertiqa_sync');
+        bc.onmessage = () => {
+          if (!mounted) return;
+          console.log('[Ertiqa] Broadcast — forcing sync');
+          // Force re-read from localStorage
+          try {
+            const stored = JSON.parse(localStorage.getItem('ertiqa_visits') || '[]');
+            setVisits([...stored]);
+          } catch { /* */ }
+        };
+      } catch { /* */ }
+    }
+
+    // Storage event — cross-tab sync
+    const handleStorage = (e: StorageEvent) => {
+      if (!mounted) return;
+      if (e.key === 'ertiqa_visits') {
+        try {
+          const stored = JSON.parse(e.newValue || '[]');
+          setVisits([...stored]);
+        } catch { /* */ }
+      }
+      if (e.key === 'ertiqa_notifications') {
+        try {
+          const stored = JSON.parse(e.newValue || '[]');
+          setNotifications([...stored]);
+        } catch { /* */ }
+      }
+    };
+    window.addEventListener('storage', handleStorage);
+
+    // Visibility + focus
+    const handleVisible = () => { if (!document.hidden) { poll(); } };
+    const handleFocus = () => { poll(); };
+    document.addEventListener('visibilitychange', handleVisible);
+    window.addEventListener('focus', handleFocus);
 
     return () => {
-      sub.unsubscribe();
-      if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+      mounted = false;
+      clearInterval(timer);
+      bc?.close();
+      window.removeEventListener('storage', handleStorage);
+      document.removeEventListener('visibilitychange', handleVisible);
+      window.removeEventListener('focus', handleFocus);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cloudEnabled]);
-
-  async function pullFromCloudEffect() {
-    if (!cloudEnabled || !supabase) return;
-    try {
-      setSyncStatus('syncing');
-      const { data, error } = await supabase.from(VISITS_TABLE).select('*').order('created_at', { ascending: false }).limit(500);
-      if (error) throw error;
-      if (data && data.length > 0) {
-        const cloudVisits = data.map(rowToVisit);
-        setVisits(prev => {
-          const merged = [...cloudVisits];
-          prev.forEach(v => { if (!merged.find(m => m.id === v.id)) merged.push(v); });
-          return merged.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-        });
-      }
-      setSyncStatus('online');
-      setLastSyncTime(nowTime());
-    } catch { setSyncStatus('offline'); }
-  }
-
-  /* ─── addVisit with smart notifications ─── */
-  const addVisit = useCallback(async (visit: Visit): Promise<boolean> => {
-    try {
-      setSyncStatus('syncing');
-
-      // 1. Save locally
-      setVisits(prev => [visit, ...prev]);
-
-      // 2. Broadcast to other tabs
-      if (channelRef.current) {
-        channelRef.current.postMessage({ type: 'new_visit', visit });
-      }
-
-      // 3. Create SMART notifications (targeted by role)
-      const newNotifs = createVisitNotifications(visit);
-      setNotifications(prev => [...newNotifs, ...prev].slice(0, 100));
-      if (channelRef.current) {
-        channelRef.current.postMessage({ type: 'sync_notifs', notifications: newNotifs });
-      }
-
-      // 4. Push to Supabase cloud
-      if (cloudEnabled && supabase) {
-        try {
-          const row = visitToRow(visit);
-          await supabase.from(VISITS_TABLE).upsert(row, { onConflict: 'id' });
-        } catch { /* still saved locally */ }
-      }
-
-      setLastSyncTime(nowTime());
-      setSyncStatus(cloudEnabled ? 'online' : 'offline');
-      return true;
-    } catch {
-      setSyncStatus('offline');
-      return false;
-    }
-  }, [cloudEnabled]);
-
-  const pushToCloud = useCallback(async (): Promise<boolean> => {
-    if (!cloudEnabled || !supabase) return false;
-    setSyncStatus('syncing');
-    try {
-      const rows = visits.map(visitToRow);
-      for (let i = 0; i < rows.length; i += 50) {
-        await supabase.from(VISITS_TABLE).upsert(rows.slice(i, i + 50), { onConflict: 'id' });
-      }
-      setSyncStatus('online');
-      setLastSyncTime(nowTime());
-      return true;
-    } catch { setSyncStatus('offline'); return false; }
-  }, [cloudEnabled, visits]);
-
-  const pullFromCloud = useCallback(async (): Promise<boolean> => {
-    if (!cloudEnabled || !supabase) return false;
-    setSyncStatus('syncing');
-    try {
-      const { data, error } = await supabase.from(VISITS_TABLE).select('*').order('created_at', { ascending: false }).limit(500);
-      if (error) throw error;
-      if (data && data.length > 0) {
-        setVisits(prev => {
-          const merged = [...data.map(rowToVisit)];
-          prev.forEach(v => { if (!merged.find(m => m.id === v.id)) merged.push(v); });
-          return merged.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-        });
-      }
-      setSyncStatus('online');
-      setLastSyncTime(nowTime());
-      return true;
-    } catch { setSyncStatus('offline'); return false; }
-  }, [cloudEnabled]);
-
-  const getVisitsForUser = useCallback((): Visit[] => visits, [visits]);
-
-  const getVisitsForCoordinator = useCallback(
-    (subjectId: string): Visit[] => visits.filter(v => v.subjectId === subjectId),
-    [visits]
-  );
-
-  const markNotificationRead = useCallback((id: string) => {
-    setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
   }, []);
 
-  const markAllRead = useCallback(() => {
-    if (!user?.role) return;
-    setNotifications(prev => prev.map(n => {
-      // Only mark notifications that are actually targeted at the current user
-      const isTargeted = n.targetRoles.some(r => {
-        if (user.role === 'manager') return r === 'manager';
-        if (user.role === 'academic_vp') return r === 'academic_vp' || r === 'manager';
-        if (user.role === 'admin_vp') return r === 'admin_vp' || r === 'manager';
-        if (user.role === 'coordinator') {
-          if (r !== 'coordinator') return false;
-          // Coordinator only sees their own subject
-          if (n.targetSubjectId) return n.targetSubjectId === user.subjectId;
-          return true;
-        }
-        if (user.role === 'sysadmin') return true;
-        return false;
+  // ═════════════════════════════════════════════════════════════════
+  //  ADD VISIT — Push to cloud + broadcast
+  // ═════════════════════════════════════════════════════════════════
+  const addVisit = useCallback(async (visitData: Omit<VisitData, 'id' | 'createdAt' | 'visibleTo'>) => {
+    const deviceId = localStorage.getItem('ertiqa_device_id') || 'unknown';
+
+    const newVisit: VisitData = {
+      ...visitData,
+      id: `v_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      createdAt: new Date().toISOString(),
+      visibleTo: ['manager', 'academic_vp', 'admin_vp', 'coordinator'],
+      deviceId,
+    };
+
+    knownIdsRef.current.add(newVisit.id);
+
+    // Update React state immediately
+    setVisits(prev => [newVisit, ...prev]);
+
+    // Save localStorage
+    const current = JSON.parse(localStorage.getItem('ertiqa_visits') || '[]');
+    localStorage.setItem('ertiqa_visits', JSON.stringify([newVisit, ...current]));
+
+    // Push to Supabase
+    if (supabase && navigator.onLine) {
+      try {
+        const { error } = await supabase.from(VISITS_TABLE).insert(visitToRow(newVisit));
+        if (error) console.error('[Ertiqa] Cloud push error:', error.message);
+      } catch (err) { console.error('[Ertiqa] Push exception:', err); }
+    }
+
+    // Generate notifications
+    const notifs = routeNotifications(newVisit);
+    notifs.forEach(n => setNotifications(prev => [n, ...prev]));
+    const existingNotifs = JSON.parse(localStorage.getItem('ertiqa_notifications') || '[]');
+    localStorage.setItem('ertiqa_notifications', JSON.stringify([...notifs, ...existingNotifs].slice(0, 500)));
+
+    // Broadcast to other tabs
+    if (typeof BroadcastChannel !== 'undefined') {
+      try { new BroadcastChannel('ertiqa_sync').postMessage('sync'); } catch { /* */ }
+    }
+
+    // Browser notification + Service Worker push
+    if ('Notification' in window && Notification.permission === 'granted') {
+      notifs.forEach(n => {
+        try { new Notification(n.title, { body: n.message, icon: '/pwa-icon-192.png', dir: 'rtl' }); }
+        catch { /* */ }
       });
-      if (!isTargeted) return n;
-      return { ...n, read: true };
-    }));
-  }, [user?.role, user?.subjectId]);
+    }
+    // Send via Service Worker (works in background too)
+    if ('serviceWorker' in navigator) {
+      notifs.forEach(n => {
+        navigator.serviceWorker.ready.then(reg => {
+          reg.active?.postMessage({
+            type: 'LOCAL_PUSH',
+            title: n.title,
+            body: n.message,
+            tag: n.id,
+          });
+        });
+      });
+    }
 
-  const exportData = useCallback((): string => {
-    return JSON.stringify({ visits, notifications, exportTime: new Date().toISOString(), version: '3.0' }, null, 2);
-  }, [visits, notifications]);
+    if ('vibrate' in navigator) {
+      try { navigator.vibrate(200); } catch { /* */ }
+    }
+  }, []);
 
-  const importData = useCallback((json: string): boolean => {
+  // ── Pull / Push / Sync ──
+  const pullFromCloud = useCallback(async () => {
+    setSyncStatus('syncing');
     try {
-      const parsed = JSON.parse(json);
-      if (parsed.visits && Array.isArray(parsed.visits)) {
-        setVisits(parsed.visits);
-        if (parsed.notifications) setNotifications(parsed.notifications);
-        setLastSyncTime(nowTime());
-        return true;
+      if (!supabase || !navigator.onLine) { setSyncStatus('offline'); return; }
+      const { data, error } = await supabase.from(VISITS_TABLE).select('*').order('created_at', { ascending: false }).limit(100);
+      if (error) { setSyncStatus('offline'); return; }
+      if (data) {
+        const cloudVisits: VisitData[] = data.map(rowToVisit);
+        cloudVisits.forEach(v => knownIdsRef.current.add(v.id));
+        localStorage.setItem('ertiqa_visits', JSON.stringify(cloudVisits));
+        setVisits([...cloudVisits]);
+        setLastSyncTime(new Date().toLocaleTimeString('ar-QA'));
       }
-      return false;
+      setSyncStatus('online');
+    } catch { setSyncStatus('offline'); }
+  }, []);
+
+  const pushToCloud = useCallback(async () => {
+    setSyncStatus('syncing');
+    try {
+      const localVisits = JSON.parse(localStorage.getItem('ertiqa_visits') || '[]');
+      if (supabase && localVisits.length > 0) {
+        const { error } = await supabase.from(VISITS_TABLE).upsert(localVisits.map(visitToRow), { onConflict: 'id' });
+        if (!error) setLastSyncTime(new Date().toLocaleTimeString('ar-QA'));
+      }
+      setSyncStatus('online');
+    } catch { setSyncStatus('offline'); }
+  }, []);
+
+  const syncVisits = useCallback(async () => { await pullFromCloud(); }, [pullFromCloud]);
+
+  // ── Export / Import ──
+  const exportData = useCallback(async () => {
+    const v = JSON.parse(localStorage.getItem('ertiqa_visits') || '[]');
+    const n = JSON.parse(localStorage.getItem('ertiqa_notifications') || '[]');
+    return JSON.stringify({ visits: v, notifications: n }, null, 2);
+  }, []);
+
+  const importData = useCallback(async (json: string) => {
+    try {
+      const d = JSON.parse(json);
+      if (d.visits) { localStorage.setItem('ertiqa_visits', JSON.stringify(d.visits)); d.visits.forEach((v: VisitData) => knownIdsRef.current.add(v.id)); setVisits([...d.visits]); }
+      if (d.notifications) { localStorage.setItem('ertiqa_notifications', JSON.stringify(d.notifications)); setNotifications([...d.notifications]); }
+      return true;
     } catch { return false; }
   }, []);
 
+  // ── Notifications ──
+  const markNotificationRead = useCallback((id: string) => {
+    setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
+    const notifs = JSON.parse(localStorage.getItem('ertiqa_notifications') || '[]');
+    localStorage.setItem('ertiqa_notifications', JSON.stringify(notifs.map((n: CloudNotification) => n.id === id ? { ...n, read: true } : n)));
+  }, []);
+
+  const markAllRead = useCallback(() => {
+    setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+    const notifs = JSON.parse(localStorage.getItem('ertiqa_notifications') || '[]');
+    localStorage.setItem('ertiqa_notifications', JSON.stringify(notifs.map((n: CloudNotification) => ({ ...n, read: true }))));
+    if ('setAppBadge' in navigator) { try { (navigator as any).clearAppBadge(); } catch { /* */ } }
+  }, []);
+
+  // ── Weekend ──
+  const isWeekend = useCallback((dateStr: string): boolean => {
+    if (!dateStr) return false;
+    const d = new Date(dateStr);
+    return d.getDay() === 5 || d.getDay() === 6;
+  }, []);
+
+  // ── Filtered notifications ──
+  const myNotifications = (() => {
+    if (!user?.role) return [];
+    return notifications.filter(n => {
+      if (!n.targetRoles?.length) return false;
+      if (user.role === 'sysadmin') return true;
+      const hasRole = n.targetRoles.some(r => {
+        if (user.role === 'manager') return r === 'manager';
+        if (user.role === 'academic_vp') return r === 'academic_vp' || r === 'manager';
+        if (user.role === 'admin_vp') return r === 'admin_vp' || r === 'manager';
+        if (user.role === 'coordinator') return r === 'coordinator';
+        return false;
+      });
+      if (user.role === 'coordinator' && n.targetSubjectId) return hasRole && n.targetSubjectId === user.subjectId;
+      return hasRole;
+    });
+  })();
+
+  const unreadCount = myNotifications.filter(n => !n.read).length;
+
   return (
     <CloudSyncContext.Provider value={{
-      visits, addVisit, getVisitsForUser, getVisitsForCoordinator,
-      notifications, myNotifications, markNotificationRead, markAllRead,
-      unreadCount, lastSyncTime, syncStatus, cloudEnabled,
-      exportData, importData, pushToCloud, pullFromCloud,
+      visits, notifications, myNotifications, unreadCount,
+      lastSyncTime, syncStatus, cloudEnabled,
+      subjects: demoSubjects, teachers: demoTeachers,
+      toast,
+      addVisit, syncVisits, exportData, importData, pushToCloud, pullFromCloud,
+      markNotificationRead, markAllRead, isWeekend,
+      syncStats,
+      clearToast,
     }}>
       {children}
     </CloudSyncContext.Provider>

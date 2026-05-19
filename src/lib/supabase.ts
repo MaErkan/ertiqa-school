@@ -1,17 +1,53 @@
 import { createClient } from '@supabase/supabase-js';
-import type { Visit } from '@/data/demoData';
+import type { VisitData } from '@/contexts/CloudSyncContext';
 
 // ═══════════════════════════════════════════════════════════════
-// Supabase Production Configuration
-// Project: zfvqgfmcprncvcwcupe
+// Supabase Configuration
 // ═══════════════════════════════════════════════════════════════
 
-const SUPABASE_URL = 'https://zfvqgfmcprncvcwcupe.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpmdnFnZm1jcHBybmN2Y3djdXBlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkwMDAyMjksImV4cCI6MjA5NDU3NjIyOX0.Kz1p7KT6gRNgKRlzAhlk4SeZWCnxehtoTDo1jbWE9i4';
+const SUPABASE_URL = 'https://xsfyzaulvpuendytrkmi.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhzZnl6YXVsdnB1ZW5keXRya21pIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkxMTk3OTgsImV4cCI6MjA5NDY5NTc5OH0.6gmcz2cYkn8oDKxSe9cGZBFVEwQkti9rSOG-SK3sDds';
 
 const isConfigured = SUPABASE_URL.length > 0 && SUPABASE_ANON_KEY.length > 0;
 
-// ─── Types for DB rows ───
+// ─── Create Supabase client ───
+export const supabase = isConfigured
+  ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      auth: {
+        persistSession: true,
+        autoRefreshToken: true,
+      },
+      realtime: {
+        params: {
+          eventsPerSecond: 100,
+        },
+      },
+    })
+  : null;
+
+export const VISITS_TABLE = 'visits';
+
+export const isSupabaseConnected = () => {
+  return isConfigured && supabase !== null;
+};
+
+// ─── Test connection ──
+export async function testSupabaseConnection(): Promise<{ success: boolean; message: string }> {
+  if (!supabase) {
+    return { success: false, message: 'Supabase client not initialized' };
+  }
+  try {
+    const { error } = await supabase.from(VISITS_TABLE).select('count', { count: 'exact', head: true });
+    if (error) {
+      return { success: false, message: `Table error: ${error.message}` };
+    }
+    return { success: true, message: 'Connected to Supabase successfully!' };
+  } catch (e) {
+    return { success: false, message: `Connection failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+// ─── Types ───
 export interface VisitRow {
   id: string;
   visitor_id: string;
@@ -28,30 +64,18 @@ export interface VisitRow {
   visit_time: string;
   visit_duration: string;
   score_objectives: number;
-  score_students: number;
+  score_student_engagement: number;
   score_discipline: number;
-  score_teacher_interaction: number;
-  score_safe_environment: number;
-  average_score: number;
-  key_observations: string;
+  score_teacher_engagement: number;
+  score_environment: number;
+  score_total: number;
+  notes: string;
   status: string;
+  device_id: string;
   created_at: string;
 }
 
-// ─── Create client ───
-export const supabase = isConfigured
-  ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-      realtime: {
-        params: { eventsPerSecond: 10 },
-      },
-    })
-  : null;
-
-export const VISITS_TABLE = 'visits';
-export const isSupabaseConfigured = () => isConfigured && supabase !== null;
-
-// ─── Visit → DB Row ───
-export function visitToRow(v: Visit): Omit<VisitRow, 'created_at'> {
+export function visitToRow(v: VisitData): any {
   return {
     id: v.id,
     visitor_id: v.visitorId,
@@ -68,18 +92,18 @@ export function visitToRow(v: Visit): Omit<VisitRow, 'created_at'> {
     visit_time: v.visitTime,
     visit_duration: v.visitDuration,
     score_objectives: v.scoreObjectives,
-    score_students: v.scoreStudents,
+    score_student_engagement: v.scoreStudentEngagement,
     score_discipline: v.scoreDiscipline,
-    score_teacher_interaction: v.scoreTeacherInteraction,
-    score_safe_environment: v.scoreSafeEnvironment,
-    average_score: v.averageScore,
-    key_observations: v.keyObservations,
+    score_teacher_engagement: v.scoreTeacherEngagement,
+    score_environment: v.scoreEnvironment,
+    score_total: v.scoreTotal,
+    notes: v.notes,
     status: v.status,
+    device_id: v.deviceId || '',
   };
 }
 
-// ─── DB Row → Visit ───
-export function rowToVisit(r: VisitRow): Visit {
+export function rowToVisit(r: any): VisitData {
   return {
     id: r.id,
     visitorId: r.visitor_id,
@@ -89,21 +113,22 @@ export function rowToVisit(r: VisitRow): Visit {
     teacherName: r.teacher_name,
     subjectId: r.subject_id,
     subjectName: r.subject_name,
-    coordinatorId: r.coordinator_id,
-    coordinatorName: r.coordinator_name,
+    coordinatorId: r.coordinator_id || '',
+    coordinatorName: r.coordinator_name || '',
     className: r.class_name,
     visitDate: r.visit_date,
     visitTime: r.visit_time,
     visitDuration: r.visit_duration,
-    scoreObjectives: r.score_objectives,
-    scoreStudents: r.score_students,
-    scoreDiscipline: r.score_discipline,
-    scoreTeacherInteraction: r.score_teacher_interaction,
-    scoreSafeEnvironment: r.score_safe_environment,
-    averageScore: r.average_score,
-    keyObservations: r.key_observations,
+    scoreObjectives: r.score_objectives || 0,
+    scoreStudentEngagement: r.score_student_engagement || 0,
+    scoreDiscipline: r.score_discipline || 0,
+    scoreTeacherEngagement: r.score_teacher_engagement || 0,
+    scoreEnvironment: r.score_environment || 0,
+    scoreTotal: r.score_total,
+    notes: r.notes || '',
     status: r.status as 'sent' | 'draft',
-    visibleTo: [r.visitor_id, r.coordinator_id],
+    visibleTo: [],
     createdAt: r.created_at,
+    deviceId: r.device_id || '',
   };
 }
