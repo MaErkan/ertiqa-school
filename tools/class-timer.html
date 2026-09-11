@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Class Timer — المؤقّت الصفي</title>
+<style>
+:root{--bg:#08111d;--text:#f6fbff;--muted:#9eb4c7;--accent:#5ee7ff;--accent2:#8b7cff;--warn:#ffd166;--danger:#ff6b6b}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;display:grid;place-items:center;font-family:Tahoma,Arial,sans-serif;color:var(--text);background:radial-gradient(circle at 20% 20%,rgba(94,231,255,.12),transparent 30%),radial-gradient(circle at 80% 15%,rgba(139,124,255,.12),transparent 30%),var(--bg)}
+.app{width:min(920px,94vw);background:linear-gradient(180deg,#122238,#0d1828);border:1px solid #24415f;border-radius:30px;padding:28px;box-shadow:0 25px 70px rgba(0,0,0,.4)}
+h1{text-align:center;margin:0 0 6px;font-size:clamp(30px,5vw,52px)}.sub{text-align:center;color:var(--muted);margin-bottom:28px}
+.timer{text-align:center;font-size:clamp(74px,18vw,180px);font-weight:900;letter-spacing:4px;padding:18px;border-radius:26px;background:#081421;border:1px solid #284663;text-shadow:0 0 22px rgba(94,231,255,.35)}
+.progress{height:18px;background:#07111d;border-radius:12px;overflow:hidden;margin:18px 0}.bar{height:100%;width:100%;background:linear-gradient(90deg,var(--accent),var(--accent2));transition:width .25s linear}
+.controls,.presets{display:flex;gap:12px;flex-wrap:wrap;justify-content:center}button{border:0;border-radius:16px;padding:14px 22px;font-size:18px;font-weight:700;cursor:pointer;background:linear-gradient(90deg,var(--accent),var(--accent2));color:#06111c}button.secondary{background:#1a2b42;color:white;border:1px solid #35516d}button.warn{background:linear-gradient(90deg,#ffe08a,#ffb347)}.preset{padding:10px 16px;font-size:16px}
+label{display:block;text-align:center;color:var(--muted);margin:18px 0 8px}.inputs{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}input{width:120px;padding:12px;border-radius:12px;border:1px solid #35516d;background:#081421;color:#fff;text-align:center;font-size:18px}.status{text-align:center;margin-top:16px;font-size:20px;min-height:30px}.minute-warning .timer{color:var(--warn);text-shadow:0 0 24px rgba(255,209,102,.5)}.finished .timer{color:var(--danger);animation:pulse .7s infinite}@keyframes pulse{50%{transform:scale(1.02);filter:brightness(1.3)}}footer{text-align:center;color:#8198aa;margin-top:20px;font-size:13px}
+</style>
+</head>
+<body>
+<div class="app" id="app">
+<h1>⏱️ المؤقّت الصفي</h1><div class="sub">Class Timer — مناسب للأنشطة الصفية والتحديات</div>
+<div class="timer" id="display">05:00</div><div class="progress"><div class="bar" id="bar"></div></div>
+<div class="controls"><button id="startBtn" onclick="toggleTimer()">▶ ابدأ</button><button class="secondary" onclick="resetTimer()">↺ إعادة</button><button class="secondary" onclick="addMinute()">+ دقيقة</button><button class="warn" onclick="fullscreen()">⛶ ملء الشاشة</button></div>
+<label>اختيار سريع</label><div class="presets"><button class="secondary preset" onclick="setPreset(1)">1 دقيقة</button><button class="secondary preset" onclick="setPreset(3)">3 دقائق</button><button class="secondary preset" onclick="setPreset(5)">5 دقائق</button><button class="secondary preset" onclick="setPreset(10)">10 دقائق</button><button class="secondary preset" onclick="setPreset(15)">15 دقيقة</button></div>
+<label>مدة مخصّصة</label><div class="inputs"><input id="mins" type="number" min="0" max="99" value="5" aria-label="الدقائق"><input id="secs" type="number" min="0" max="59" value="0" aria-label="الثواني"><button class="secondary" onclick="setCustom()">تطبيق</button></div>
+<div class="status" id="status">جاهز للنشاط ✨</div><footer>تنبيه بصري عند بقاء دقيقة واحدة • صوت خفيف عند انتهاء الوقت</footer>
+</div>
+<script>
+let total=300,remaining=300,running=false,timerId=null;const display=document.getElementById('display'),bar=document.getElementById('bar'),app=document.getElementById('app'),statusEl=document.getElementById('status'),startBtn=document.getElementById('startBtn');
+function fmt(s){const m=Math.floor(s/60),sec=s%60;return String(m).padStart(2,'0')+':'+String(sec).padStart(2,'0')}
+function render(){display.textContent=fmt(remaining);bar.style.width=((remaining/Math.max(total,1))*100)+'%';app.classList.toggle('minute-warning',remaining<=60&&remaining>0);app.classList.toggle('finished',remaining===0);if(remaining===0)statusEl.textContent='⏰ انتهى الوقت!';else if(remaining<=60)statusEl.textContent='⚠️ بقيت دقيقة واحدة أو أقل';else statusEl.textContent=running?'الوقت يعمل الآن…':'جاهز للنشاط ✨'}
+function tick(){if(remaining>0){remaining--;render()}if(remaining<=0){clearInterval(timerId);running=false;startBtn.textContent='▶ ابدأ';beep()}}
+function toggleTimer(){if(running){clearInterval(timerId);running=false;startBtn.textContent='▶ متابعة';render()}else if(remaining>0){running=true;startBtn.textContent='⏸ إيقاف مؤقت';timerId=setInterval(tick,1000);render()}}
+function resetTimer(){clearInterval(timerId);running=false;remaining=total;startBtn.textContent='▶ ابدأ';render()}
+function setPreset(min){clearInterval(timerId);running=false;total=remaining=min*60;document.getElementById('mins').value=min;document.getElementById('secs').value=0;startBtn.textContent='▶ ابدأ';render()}
+function setCustom(){let m=parseInt(document.getElementById('mins').value||0),s=parseInt(document.getElementById('secs').value||0);s=Math.min(59,Math.max(0,s));m=Math.max(0,m);clearInterval(timerId);running=false;total=remaining=m*60+s;startBtn.textContent='▶ ابدأ';render()}
+function addMinute(){remaining+=60;total+=60;render()}
+function fullscreen(){if(!document.fullscreenElement)document.documentElement.requestFullscreen?.();else document.exitFullscreen?.()}
+function beep(){try{const ctx=new(window.AudioContext||window.webkitAudioContext)(),o=ctx.createOscillator(),g=ctx.createGain();o.connect(g);g.connect(ctx.destination);o.frequency.value=880;g.gain.value=.15;o.start();setTimeout(()=>{o.stop();ctx.close()},700)}catch(e){}}
+render();
+</script>
+</body></html>
